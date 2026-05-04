@@ -342,6 +342,9 @@ esp_err_t notify_weight_dispay(void *ctx , const esp_weight_event_t *e){
     };
 
     xQueueSend(queue, &event, portMAX_DELAY);
+
+
+    
    
     return ESP_OK;
 }
@@ -411,6 +414,9 @@ void app_main(void)
             ESP_LOGE(TAG, "Failed to read weight: %s", esp_err_to_name(ret));
             vTaskDelay(pdMS_TO_TICKS(1000)); // Delay de 1 segundo
         }
+
+        
+       
         
     }
 }

@@ -9,19 +9,15 @@
 
 static const char *TAG = "weight";
 
-
-
-
-
 typedef struct esp_weight_indicator_t esp_weight_indicator_t;
 
-typedef struct {
+typedef struct
+{
     float buf[STAB_WINDOW];
     int32_t index;
     int32_t count;
-    
-} stability_state_t;
 
+} stability_state_t;
 
 typedef struct
 {
@@ -74,9 +70,9 @@ struct esp_weight_indicator_t
     esp_weight_event_t last_event; // last weight event, containing the last raw and filtered weight values, stability status, etc.
 
     weight_filter_state_t filter_state; // state of the filter, such as the current EMA value, the buffer for moving average, etc.
-   
+
     stability_state_t stability_state; // state for stability detection, such as the buffer for recent weight values, index, count, etc.
-    
+
     void *driver;                                     // Pointer to the weight sensor driver, can be used to store a reference to the driver instance
     esp_weight_indicator_update_cb_t update_callback; // Callback function for updates
     // esp_weight_indicator_notify_cb_t notify_callback; // Callback function for writes
@@ -84,7 +80,6 @@ struct esp_weight_indicator_t
     // persistent storage fields
     esp_nvs_handle_t esp_nvs_handle;
 };
-
 
 static float moving_avg(esp_weight_indicator_handle_t handle)
 {
@@ -103,9 +98,7 @@ static float moving_avg(esp_weight_indicator_handle_t handle)
 
 static float ema(esp_weight_indicator_handle_t handle)
 {
-    
-    
-    
+
     if (handle->filter_state.count == 0)
     {
         handle->filter_state.ema_value = handle->last_event.weight;
@@ -115,7 +108,6 @@ static float ema(esp_weight_indicator_handle_t handle)
     {
         handle->filter_state.ema_value = handle->persistent.filter_config.alpha * handle->last_event.weight + (1 - handle->persistent.filter_config.alpha) * handle->filter_state.ema_value;
     }
-
 
     return handle->filter_state.ema_value;
 }
@@ -139,8 +131,10 @@ static bool stability_check(esp_weight_indicator_handle_t handle)
 
     for (int i = 1; i < handle->stability_state.count; i++)
     {
-        if (handle->stability_state.buf[i] < min) min = handle->stability_state.buf[i];
-        if (handle->stability_state.buf[i] > max) max = handle->stability_state.buf[i];
+        if (handle->stability_state.buf[i] < min)
+            min = handle->stability_state.buf[i];
+        if (handle->stability_state.buf[i] > max)
+            max = handle->stability_state.buf[i];
     }
 
     return (max - min) < handle->persistent.stable_threshold;
@@ -157,10 +151,6 @@ esp_err_t esp_weight_indicator_init(esp_weight_indicator_config_t *config, esp_w
 
     // esp_weight_indicator->weight = config->weight;
     esp_weight_indicator->driver = config->driver;
-
-
-
-    
 
     // Initialize NVS for persistent storage
     esp_nvs_config_t nvs_config = {
@@ -180,7 +170,7 @@ esp_err_t esp_weight_indicator_init(esp_weight_indicator_config_t *config, esp_w
     // esp_nvs_change_key("weight", esp_weight_indicator->esp_nvs_handle);
 
     ret = esp_nvs_load_blob(esp_weight_indicator->esp_nvs_handle, &esp_weight_indicator->persistent, sizeof(weight_persistent_t));
-    
+
     if (ret != ESP_OK)
     {
         ESP_LOGW(TAG, "No existing calibration data found, using defaults");
@@ -202,13 +192,8 @@ esp_err_t esp_weight_indicator_init(esp_weight_indicator_config_t *config, esp_w
             ESP_LOGE(TAG, "Failed to save default calibration data: %s", esp_err_to_name(ret));
             goto err;
         }
-
-         
-
-
     }
 
-   
     *handle = esp_weight_indicator;
     ESP_LOGI(TAG, "Weight indicator initialized successfully");
     ret = ESP_OK;
@@ -291,7 +276,7 @@ esp_err_t esp_weight_indicator_notify(esp_weight_indicator_handle_t handle)
         .raw = handle->last_event.raw,
         .stable = handle->last_event.stable,
         .filtered = handle->last_event.filtered};
-    
+
     for (int i = 0; i < handle->count; i++)
     {
         if (handle->listeners[i].cb)
@@ -310,7 +295,12 @@ esp_err_t esp_weight_indicator_notify(esp_weight_indicator_handle_t handle)
 esp_err_t esp_weight_calibration_set_zero(esp_weight_indicator_handle_t handle)
 {
     ESP_RETURN_ON_FALSE(handle, ESP_ERR_INVALID_ARG, TAG, "Invalid arguments");
-    // handle->persistent.offset = offset;
+
+    if (!handle->last_event.stable)
+        return ESP_ERR_INVALID_STATE;
+
+    handle->persistent.offset = handle->last_event.raw;
+    
     return esp_nvs_save_blob(handle->esp_nvs_handle, &handle->persistent, sizeof(weight_persistent_t));
 }
 
@@ -318,7 +308,18 @@ esp_err_t esp_weight_calibration_set_scale(esp_weight_indicator_handle_t handle,
 {
 
     ESP_RETURN_ON_FALSE(handle, ESP_ERR_INVALID_ARG, TAG, "Invalid arguments");
-    // handle->persistent.scale = scale;
+    
+     if (!handle->last_event.stable)
+        return ESP_ERR_INVALID_STATE;
+
+    int32_t delta = handle->last_event.raw - handle->persistent.offset;
+
+    if (delta == 0)
+        return ESP_ERR_INVALID_STATE;
+
+    handle->persistent.scale = known_mass / (float)delta;
+
     return esp_nvs_save_blob(handle->esp_nvs_handle, &handle->persistent, sizeof(weight_persistent_t));
 }
+
 
