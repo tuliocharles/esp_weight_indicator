@@ -1,0 +1,10 @@
+dependencies:
+  tuliocharles/esp_weight_indicator:
+    version: ">=0.0.0"
+    # for local developmente, use the local
+    # copy of the component
+    override_path: "../../../"
+  esp-idf-lib/hx711:
+    version: ">=1.1.0"
+  lvgl/lvgl: "9.2.0"
+  esp_lcd_sh1107: "^1"
