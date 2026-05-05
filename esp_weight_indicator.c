@@ -14,6 +14,7 @@ typedef struct esp_weight_indicator_t esp_weight_indicator_t;
 typedef struct
 {
     float buf[STAB_WINDOW];
+    int32_t buf_raw[STAB_WINDOW];
     int32_t index;
     int32_t count;
 
@@ -81,6 +82,15 @@ struct esp_weight_indicator_t
     esp_nvs_handle_t esp_nvs_handle;
 };
 
+static int32_t raw_mean(esp_weight_indicator_handle_t handle)
+{
+    int64_t sum = 0;
+    for (int i = 0; i < handle->stability_state.count; i++)
+        sum += handle->stability_state.buf_raw[i];
+
+    return (int32_t)(sum / handle->stability_state.count);
+}
+
 static float moving_avg(esp_weight_indicator_handle_t handle)
 {
     handle->filter_state.window[handle->filter_state.index] = handle->last_event.weight;
@@ -115,6 +125,8 @@ static float ema(esp_weight_indicator_handle_t handle)
 static void stability_push(esp_weight_indicator_handle_t handle)
 {
     handle->stability_state.buf[handle->stability_state.index] = handle->last_event.filtered;
+    handle->stability_state.buf_raw[handle->stability_state.index] = handle->last_event.raw;
+    
     handle->stability_state.index = (handle->stability_state.index + 1) % STAB_WINDOW;
 
     if (handle->stability_state.count < STAB_WINDOW)
@@ -128,11 +140,14 @@ static bool stability_check(esp_weight_indicator_handle_t handle)
 
     float min = handle->stability_state.buf[0];
     float max = handle->stability_state.buf[0];
+    
+    
 
     for (int i = 1; i < handle->stability_state.count; i++)
     {
         if (handle->stability_state.buf[i] < min)
             min = handle->stability_state.buf[i];
+
         if (handle->stability_state.buf[i] > max)
             max = handle->stability_state.buf[i];
     }
@@ -299,7 +314,7 @@ esp_err_t esp_weight_calibration_set_zero(esp_weight_indicator_handle_t handle)
     if (!handle->last_event.stable)
         return ESP_ERR_INVALID_STATE;
 
-    handle->persistent.offset = handle->last_event.raw;
+    handle->persistent.offset = raw_mean(handle);
     
     return esp_nvs_save_blob(handle->esp_nvs_handle, &handle->persistent, sizeof(weight_persistent_t));
 }
@@ -312,7 +327,7 @@ esp_err_t esp_weight_calibration_set_scale(esp_weight_indicator_handle_t handle,
      if (!handle->last_event.stable)
         return ESP_ERR_INVALID_STATE;
 
-    int32_t delta = handle->last_event.raw - handle->persistent.offset;
+    int32_t delta = raw_mean(handle) - handle->persistent.offset;
 
     if (delta == 0)
         return ESP_ERR_INVALID_STATE;
