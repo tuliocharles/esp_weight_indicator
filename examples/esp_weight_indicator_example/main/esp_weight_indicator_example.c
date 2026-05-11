@@ -415,8 +415,5 @@ void app_main(void)
             vTaskDelay(pdMS_TO_TICKS(1000)); // Delay de 1 segundo
         }
 
-       
-       
-        
     }
 }
