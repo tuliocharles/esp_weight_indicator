@@ -8,12 +8,22 @@
 // the display driver, the communication driver, etc. These pointers will be used to call the functions 
 // of these components from the weight indicator code.
 
+typedef enum {
+    ESP_WEIGHT_INDICATOR_UNIT_MG = 0,
+    ESP_WEIGHT_INDICATOR_UNIT_G,
+    ESP_WEIGHT_INDICATOR_UNIT_KG,
+    ESP_WEIGHT_INDICATOR_UNIT_T,
+    ESP_WEIGHT_INDICATOR_UNIT_MAX
+} esp_weight_unit_t;
+
 typedef struct
 {
     float weight;
     float filtered;
     int32_t raw;
     bool stable;
+    uint8_t decimals;        // Number of decimal places to display
+    esp_weight_unit_t unit; // Unit of measurement
 } esp_weight_event_t;
 
 typedef enum {
@@ -59,5 +69,19 @@ esp_err_t esp_weight_indicator_notify(esp_weight_indicator_handle_t handle);
 esp_err_t esp_weight_calibration_set_zero(esp_weight_indicator_handle_t handle);
 
 esp_err_t esp_weight_calibration_set_scale(esp_weight_indicator_handle_t handle, float known_mass);
+
+esp_err_t esp_weight_indicator_set_defaults(esp_weight_indicator_handle_t handle);
+
+esp_err_t esp_weight_indicator_set_filter(esp_weight_indicator_handle_t handle, weight_filter_config_t *filter_config);
+
+esp_err_t esp_weight_indicator_set_decimals(esp_weight_indicator_handle_t handle, uint8_t decimals);
+
+esp_err_t esp_weight_indicator_get_decimals(esp_weight_indicator_handle_t handle, uint8_t *decimals);
+
+esp_err_t esp_weight_indicator_set_unit(esp_weight_indicator_handle_t handle, esp_weight_unit_t unit);
+
+const char *esp_weight_indicator_unit_to_str(esp_weight_unit_t unit);
+
+double esp_weight_indicator_unit_to_factor(esp_weight_unit_t unit);
 
 #endif

@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include "esp_weight_indicator.h"
-#include "hx711.h"
+#include "esp_loadcell.h"
 #include "freertos/FreeRTOS.h"
 #include "esp_log.h"
 
@@ -34,17 +34,40 @@ static const char *TAG = "main";
 #include "lvgl.h"
 
 
+#if CONFIG_IDF_TARGET_ESP32
+#define PIN_NUM_DOUT 17
+#define PIN_NUM_PD_SCK 16
+#elif CONFIG_IDF_TARGET_ESP32C6
+#define PIN_NUM_DOUT 23
+#define PIN_NUM_PD_SCK 15
+#else
+#error "ESP32 target not supported"
+#endif
+
 /*==============================================================
                         DEFINES - HARDWARE
 ==============================================================*/
 
+#if CONFIG_IDF_TARGET_ESP32
+#define EXAMPLE_PIN_NUM_SDA 19
+#define EXAMPLE_PIN_NUM_SCL 18
+#elif CONFIG_IDF_TARGET_ESP32C6
+#define EXAMPLE_PIN_NUM_SDA 19
+#define EXAMPLE_PIN_NUM_SCL 18
+#else
+#error "ESP32 target not supported"
+#endif
+
+
 #define I2C_BUS_PORT 0
 
 #define EXAMPLE_LCD_PIXEL_CLOCK_HZ (400 * 1000)
-#define EXAMPLE_PIN_NUM_SDA 19
-#define EXAMPLE_PIN_NUM_SCL 18
+//#define EXAMPLE_PIN_NUM_SDA 19
+//#define EXAMPLE_PIN_NUM_SCL 18
 #define EXAMPLE_PIN_NUM_RST -1
 #define EXAMPLE_I2C_HW_ADDR 0x3C
+
+
 
 /*==============================================================
                         DEFINES - DISPLAY
@@ -273,7 +296,7 @@ static void oled_task(void *arg)
     lv_obj_t *scr = lv_display_get_screen_active(display);
     lv_obj_t *label_weight = lv_label_create(scr);
     lv_label_set_text(label_weight, "00000");
-    lv_obj_set_style_text_font(label_weight, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(label_weight, &lv_font_montserrat_14, 0);
     lv_obj_align(label_weight, LV_ALIGN_TOP_MID, 0, 0); //LV_ALIGN_CENTER
 
   
@@ -284,11 +307,13 @@ static void oled_task(void *arg)
 
     esp_weight_event_t strain_disp;
     char strain_str[20];
+
     while (1)
     {
         xQueueReceive(queue, &strain_disp, portMAX_DELAY);
         _lock_acquire(&lvgl_api_lock);
-        sprintf(strain_str, "%.3f kg", strain_disp.filtered);
+    
+        sprintf(strain_str, "%.*f %s", strain_disp.decimals, strain_disp.filtered, esp_weight_indicator_unit_to_str(strain_disp.unit));
         lv_label_set_text(label_weight, strain_str);
     
         _lock_release(&lvgl_api_lock);
@@ -310,23 +335,10 @@ static void oled_task(void *arg)
 
 esp_err_t update_weight(void *driver, int32_t *data_raw){
 
-            hx711_t *dev = (hx711_t *)driver; // Cast do ponteiro genérico para o tipo específico do driver
-           
-            esp_err_t r = hx711_wait(dev, 500);
-            if (r != ESP_OK)
-            {
-                ESP_LOGE(TAG, "Device not found: %d (%s)\n", r, esp_err_to_name(r));
-                return r;
-            }
-
-            r = hx711_read_average(dev, 1, data_raw);
-            if (r != ESP_OK)
-            {
-                ESP_LOGE(TAG, "Could not read data: %d (%s)\n", r, esp_err_to_name(r));
-                return r;
-            }
-            
-            r = ESP_OK;
+      
+            esp_loadcell_handle_t handle = (esp_loadcell_handle_t)driver;
+            esp_err_t r;
+            r = esp_loadcell_read(handle, data_raw);
             return r;
 }
     
@@ -338,14 +350,13 @@ esp_err_t notify_weight_dispay(void *ctx , const esp_weight_event_t *e){
         .weight = e->weight,
         .raw = e->raw,
         .stable = e->stable,
-        .filtered = e->filtered
+        .filtered = e->filtered,
+        .decimals = e->decimals,
+        .unit = e->unit
     };
 
     xQueueSend(queue, &event, portMAX_DELAY);
 
-
-    
-   
     return ESP_OK;
 }
 
@@ -354,19 +365,22 @@ void app_main(void)
         
     QueueHandle_t queue_display = xQueueCreate(3, sizeof(esp_weight_event_t));
 
-    // INIT DRIVER WEIGHT SENSOR
-    hx711_t dev =
-        {
-            .dout = 17,
-            .pd_sck = 16,
-            .gain = HX711_GAIN_A_64};
+    esp_loadcell_handle_t esp_loadcell_handle; 
 
-    ESP_ERROR_CHECK(hx711_init(&dev));
+    esp_loadcell_config_t esp_loadcell_config = {
+        .dout = PIN_NUM_DOUT,
+        .pd_sck = PIN_NUM_PD_SCK,
+        .type = ESP_LOADCELL_HX711,
+        .gain = 2};
+
+    esp_loadcell_init(&esp_loadcell_config, &esp_loadcell_handle);
+
     
     esp_weight_indicator_handle_t weight_indicator_handle;
+
     esp_weight_indicator_config_t weight_indicator_config = {
         .weight = 0,
-        .driver = &dev,
+        .driver = esp_loadcell_handle,
         .filter_config = {
             .type = WEIGHT_FILTER_MOVING_AVG,
             .alpha = 0.1,
@@ -404,6 +418,22 @@ void app_main(void)
 
     
     xTaskCreate(oled_task, "oled_task", 4096, queue_display , 5, NULL);
+
+    // SETA PARA OS VALORES DEFAULTS DE CALIBRAÇÃO
+    esp_weight_indicator_set_defaults(weight_indicator_handle);
+
+    //update filter configuration
+    weight_filter_config_t new_filter_config = {
+        .type = WEIGHT_FILTER_MOVING_AVG,
+        .window_size = 5,
+        .alpha = 0.1
+    };
+
+    esp_weight_indicator_set_filter(weight_indicator_handle, &new_filter_config);
+
+    esp_weight_indicator_set_decimals(weight_indicator_handle, 3);
+
+    esp_weight_indicator_set_unit(weight_indicator_handle, ESP_WEIGHT_INDICATOR_UNIT_G);
 
     while (1) {
   

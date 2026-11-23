@@ -9,6 +9,19 @@
 
 static const char *TAG = "weight";
 
+static const float UNIT_FACTORS[ESP_WEIGHT_INDICATOR_UNIT_MAX] = {
+    [ESP_WEIGHT_INDICATOR_UNIT_MG] = 1000000.0f, // 1 kg = 1.000.000 mg
+    [ESP_WEIGHT_INDICATOR_UNIT_G] = 1000.0f,     // 1 kg = 1.000 g
+    [ESP_WEIGHT_INDICATOR_UNIT_KG] = 1.0f,       // 1 kg = 1 kg (base)
+    [ESP_WEIGHT_INDICATOR_UNIT_T] = 0.001f       // 1 kg = 0,001 t
+};
+
+static const char *UNIT_STRINGS[ESP_WEIGHT_INDICATOR_UNIT_MAX] = {
+    [ESP_WEIGHT_INDICATOR_UNIT_MG] = "mg",
+    [ESP_WEIGHT_INDICATOR_UNIT_G] = "g",
+    [ESP_WEIGHT_INDICATOR_UNIT_KG] = "kg",
+    [ESP_WEIGHT_INDICATOR_UNIT_T] = "t"};
+
 typedef struct esp_weight_indicator_t esp_weight_indicator_t;
 
 typedef struct
@@ -47,6 +60,8 @@ typedef struct
 
     // display parameters
     uint8_t decimals;
+    // UNIDADE DO PESO
+    esp_weight_unit_t unit;
 
     // stability parameters
     float stable_threshold;  // variação máxima permitida
@@ -81,6 +96,47 @@ struct esp_weight_indicator_t
     // persistent storage fields
     esp_nvs_handle_t esp_nvs_handle;
 };
+
+const char *esp_weight_indicator_unit_to_str(esp_weight_unit_t unit)
+{
+    if (unit >= ESP_WEIGHT_INDICATOR_UNIT_MAX)
+    {
+        return "";
+    }
+    return UNIT_STRINGS[unit];
+}
+
+double esp_weight_indicator_unit_to_factor(esp_weight_unit_t unit)
+{
+    if (unit >= ESP_WEIGHT_INDICATOR_UNIT_MAX)
+    {
+        return 1.0; // default factor for invalid unit
+    }
+    return UNIT_FACTORS[unit];
+}
+
+// function to set default values
+esp_err_t esp_weight_indicator_set_defaults(esp_weight_indicator_handle_t handle)
+{
+    ESP_RETURN_ON_FALSE(handle, ESP_ERR_INVALID_ARG, TAG, "Invalid arguments");
+
+    memset(&handle->persistent, 0, sizeof(weight_persistent_t));
+
+    handle->persistent.version = 1;
+    handle->persistent.offset = -13300;
+    handle->persistent.scale = 4.9f / 1000000.0f;
+    handle->persistent.decimals = 3;
+    handle->persistent.unit = ESP_WEIGHT_INDICATOR_UNIT_KG; // default unit is kilograms
+    handle->persistent.stable_threshold = 0.005f;           // 5g se a unidade principal for kg
+    handle->persistent.stable_time_ms = 1000;
+    handle->persistent.filter_config.type = WEIGHT_FILTER_MOVING_AVG;
+    handle->persistent.filter_config.alpha = 0.1f;
+    handle->persistent.filter_config.window_size = 5;
+    handle->persistent.tare = 0.0f;
+    handle->persistent.tare_enabled = false;
+
+    return esp_nvs_save_blob(handle->esp_nvs_handle, &handle->persistent, sizeof(weight_persistent_t));
+}
 
 static int32_t raw_mean(esp_weight_indicator_handle_t handle)
 {
@@ -126,7 +182,7 @@ static void stability_push(esp_weight_indicator_handle_t handle)
 {
     handle->stability_state.buf[handle->stability_state.index] = handle->last_event.filtered;
     handle->stability_state.buf_raw[handle->stability_state.index] = handle->last_event.raw;
-    
+
     handle->stability_state.index = (handle->stability_state.index + 1) % STAB_WINDOW;
 
     if (handle->stability_state.count < STAB_WINDOW)
@@ -140,8 +196,6 @@ static bool stability_check(esp_weight_indicator_handle_t handle)
 
     float min = handle->stability_state.buf[0];
     float max = handle->stability_state.buf[0];
-    
-    
 
     for (int i = 1; i < handle->stability_state.count; i++)
     {
@@ -190,7 +244,10 @@ esp_err_t esp_weight_indicator_init(esp_weight_indicator_config_t *config, esp_w
     {
         ESP_LOGW(TAG, "No existing calibration data found, using defaults");
         // Set default calibration values
-        esp_weight_indicator->persistent.offset = -13300;
+
+        esp_weight_indicator_set_defaults(esp_weight_indicator);
+
+        /*esp_weight_indicator->persistent.offset = -13300;
         esp_weight_indicator->persistent.scale = 4.9 / 1000000.0f;
         esp_weight_indicator->persistent.decimals = 2;
         esp_weight_indicator->persistent.stable_threshold = 0.5f; // example threshold
@@ -202,6 +259,7 @@ esp_err_t esp_weight_indicator_init(esp_weight_indicator_config_t *config, esp_w
         esp_weight_indicator->persistent.tare = 0.0f;
         esp_weight_indicator->persistent.tare_enabled = false;
         ret = esp_nvs_save_blob(esp_weight_indicator->esp_nvs_handle, &esp_weight_indicator->persistent, sizeof(weight_persistent_t));
+        */
         if (ret != ESP_OK)
         {
             ESP_LOGE(TAG, "Failed to save default calibration data: %s", esp_err_to_name(ret));
@@ -286,11 +344,15 @@ esp_err_t esp_weight_indicator_notify(esp_weight_indicator_handle_t handle)
     // testar se os handles são válidos
     ESP_RETURN_ON_FALSE(handle, ESP_ERR_INVALID_ARG, TAG, "Invalid arguments");
 
+    double factor = esp_weight_indicator_unit_to_factor(handle->persistent.unit);
+
     esp_weight_event_t event = {
-        .weight = handle->last_event.weight,
+        .weight = (float)((double)handle->last_event.weight * factor),
+        .filtered = (float)((double)handle->last_event.filtered * factor),
         .raw = handle->last_event.raw,
         .stable = handle->last_event.stable,
-        .filtered = handle->last_event.filtered};
+        .decimals = handle->persistent.decimals,
+        .unit = handle->persistent.unit};
 
     for (int i = 0; i < handle->count; i++)
     {
@@ -315,7 +377,7 @@ esp_err_t esp_weight_calibration_set_zero(esp_weight_indicator_handle_t handle)
         return ESP_ERR_INVALID_STATE;
 
     handle->persistent.offset = raw_mean(handle);
-    
+
     return esp_nvs_save_blob(handle->esp_nvs_handle, &handle->persistent, sizeof(weight_persistent_t));
 }
 
@@ -323,8 +385,8 @@ esp_err_t esp_weight_calibration_set_scale(esp_weight_indicator_handle_t handle,
 {
 
     ESP_RETURN_ON_FALSE(handle, ESP_ERR_INVALID_ARG, TAG, "Invalid arguments");
-    
-     if (!handle->last_event.stable)
+
+    if (!handle->last_event.stable)
         return ESP_ERR_INVALID_STATE;
 
     int32_t delta = raw_mean(handle) - handle->persistent.offset;
@@ -337,4 +399,46 @@ esp_err_t esp_weight_calibration_set_scale(esp_weight_indicator_handle_t handle,
     return esp_nvs_save_blob(handle->esp_nvs_handle, &handle->persistent, sizeof(weight_persistent_t));
 }
 
+esp_err_t esp_weight_indicator_set_filter(esp_weight_indicator_handle_t handle, weight_filter_config_t *filter_config)
+{
+    ESP_RETURN_ON_FALSE(handle && filter_config, ESP_ERR_INVALID_ARG, TAG, "Invalid arguments");
 
+    handle->persistent.filter_config = *filter_config;
+
+    // Reset filter state
+    handle->filter_state.count = 0;
+    handle->filter_state.index = 0;
+    handle->filter_state.ema_value = 0;
+
+    return esp_nvs_save_blob(handle->esp_nvs_handle, &handle->persistent, sizeof(weight_persistent_t));
+}
+
+esp_err_t esp_weight_indicator_set_decimals(esp_weight_indicator_handle_t handle, uint8_t decimals)
+{
+    ESP_RETURN_ON_FALSE(handle, ESP_ERR_INVALID_ARG, TAG, "Invalid arguments");
+
+    handle->persistent.decimals = decimals;
+
+    return esp_nvs_save_blob(handle->esp_nvs_handle, &handle->persistent, sizeof(weight_persistent_t));
+}
+
+esp_err_t esp_weight_indicator_get_decimals(esp_weight_indicator_handle_t handle, uint8_t *decimals)
+{
+    ESP_RETURN_ON_FALSE(handle && decimals, ESP_ERR_INVALID_ARG, TAG, "Invalid arguments");
+
+    *decimals = handle->persistent.decimals;
+
+    return ESP_OK;
+}
+
+esp_err_t esp_weight_indicator_set_unit(esp_weight_indicator_handle_t handle, esp_weight_unit_t unit)
+{
+    ESP_RETURN_ON_FALSE(handle, ESP_ERR_INVALID_ARG, TAG, "Invalid arguments");
+
+    if (unit >= ESP_WEIGHT_INDICATOR_UNIT_MAX)
+        return ESP_ERR_INVALID_ARG;
+
+    handle->persistent.unit = unit;
+
+    return esp_nvs_save_blob(handle->esp_nvs_handle, &handle->persistent, sizeof(weight_persistent_t));
+}
